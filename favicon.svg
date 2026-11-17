@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <text
+    x="4"
+    y="50"
+    font-family="Pretendard, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+    font-size="48"
+    font-weight="800"
+    letter-spacing="-2"
+    fill="#A88BFA"
+  >G</text>
+  <text
+    x="31"
+    y="50"
+    font-family="Pretendard, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+    font-size="48"
+    font-weight="800"
+    letter-spacing="-2"
+    fill="#7AD6B7"
+  >M</text>
+</svg>
