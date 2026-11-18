@@ -1,5 +1,5 @@
 /**
- * GuGyeongMo—Portfolio — Autonomous 5-Agent Collaborative Refinement & 3D Cursor Sphere Engine
+ * GuGyeongMo—Portfolio — Autonomous 5-Agent Collaborative Refinement & Agent Dock Engine
  */
 
 if ('scrollRestoration' in history) {
@@ -66,6 +66,11 @@ function lerpHexColor(hexA, hexB, t) {
   return `#${((1 << 24) | (r << 16) | (g << 8) | bl).toString(16).slice(1)}`;
 }
 
+function quadBezier(p0, p1, p2, t) {
+  const inv = 1 - t;
+  return inv * inv * p0 + 2 * inv * t * p1 + t * t * p2;
+}
+
 class PortfolioApp {
   constructor(data) {
     this.data = data;
@@ -73,6 +78,7 @@ class PortfolioApp {
     this.roleColorMap = Object.fromEntries(data.agents.map((r) => [r.id, r.color]));
     this.cursors = [];
     this.particles = [];
+    this.dockSlots = new Map();
     this.pointer = { x: window.innerWidth * 0.5, y: window.innerHeight * 0.38, active: false, lastMoveAt: 0 };
     this.mouseOrbitMode = false;
     this.introCompleted = false;
@@ -86,11 +92,14 @@ class PortfolioApp {
     this.lastScrollAt = 0;
     this.scrollTicking = false;
 
+    // Agent Dock state: 'idle' | 'docking' | 'docked'
+    this.dockState = 'idle';
+    this.dockSequenceId = 0;
+
     this.applyHeadMetadata();
     this.mountShell();
     this.initTrailCanvas();
     this.initAgentCursors();
-    this.initContactSphere();
     this.bindEvents();
     this.runIntroAndRevealSequence();
     this.animate = this.animate.bind(this);
@@ -244,7 +253,6 @@ class PortfolioApp {
       el('p', { className: 'section-subcopy', text: brand.subcopy, dataset: { agentType: 'layout' } })
     ]);
 
-    // Focus 1~4 cards render cleanly without being re-wiped on scroll
     const statsStrip = el(
       'div',
       { className: 'stats-strip' },
@@ -442,18 +450,61 @@ class PortfolioApp {
       ])
     ]);
 
-    this.sphereCanvas = el('canvas', { id: 'contact-swarm-canvas' });
-    const sphereCard = el('div', { className: 'swarm-sphere-card' }, [
-      this.sphereCanvas,
-      el('p', {
-        className: 'swarm-caption',
-        text: 'INTERACTIVE 3D CURSOR SPHERE — HOVER TO DEFLECT SWARM VECTORS',
-        dataset: { agentType: 'motion' }
+    // Build AGENT DOCK hardware station in the right card
+    this.dockStatusText = el('span', { text: 'STANDBY · 0/5 DOCKED' });
+    const dockHeader = el('div', { className: 'dock-header' }, [
+      el('div', { className: 'dock-title-group' }, [
+        el('span', { className: 'dock-eyebrow', text: 'AUTONOMOUS SWARM STATION' }),
+        el('h3', { className: 'dock-title', text: 'AGENT DOCK' })
+      ]),
+      el('div', { className: 'dock-status-pill' }, [
+        el('span', { className: 'dock-status-dot' }),
+        this.dockStatusText
+      ])
+    ]);
+
+    const slotsGrid = el(
+      'div',
+      { className: 'dock-slots-grid' },
+      this.roles.map((role) => {
+        const bayTarget = el('div', { className: 'dock-bay-target' });
+        const stateLabel = el('span', { className: 'dock-slot-state', text: 'STANDBY' });
+        const slotEl = el(
+          'div',
+          {
+            className: 'dock-slot',
+            dataset: { roleId: role.id }
+          },
+          [
+            el('span', { className: 'dock-slot-led' }),
+            bayTarget,
+            el('span', { className: 'dock-slot-role', text: role.label }),
+            stateLabel
+          ]
+        );
+        slotEl.style.setProperty('--slot-color', role.color);
+        this.dockSlots.set(role.id, { slotEl, bayTarget, stateLabel, role });
+        return slotEl;
       })
+    );
+
+    const dockChamber = el('div', { className: 'dock-chamber' }, [slotsGrid]);
+
+    this.dockFooterNote = el('span', { text: 'SCROLL TO BOTTOM TO DOCK ACTIVE AGENTS' });
+    this.dockProgressFill = el('div', { className: 'dock-progress-fill' });
+    const dockFooter = el('div', { className: 'dock-footer-bar' }, [
+      this.dockFooterNote,
+      el('div', { className: 'dock-progress-track' }, [this.dockProgressFill])
+    ]);
+
+    this.agentDockCard = el('div', { className: 'agent-dock-card', id: 'agent-dock' }, [
+      dockHeader,
+      dockChamber,
+      dockFooter
     ]);
 
     return el('section', { id: 'contact', className: 'portfolio-section' }, [
-      el('div', { className: 'contact-grid' }, [contactCard, sphereCard])
+      el('div', { className: 'contact-grid' }, [contactCard, this.agentDockCard])
     ]);
   }
 
@@ -499,10 +550,13 @@ class PortfolioApp {
         y: startY,
         tx: startX,
         ty: startY,
+        scale: 1,
         ease: 0.14 + idx * 0.012,
         history: [],
         typingJob: null,
         isInspecting: false,
+        isDocked: false,
+        dockFlight: null,
         patrolElement: null,
         nextPatrolAt: 0
       };
@@ -531,6 +585,12 @@ class PortfolioApp {
       { passive: true }
     );
 
+    window.addEventListener('resize', () => {
+      if (this.dockState === 'docked') {
+        this.snapDockedCursorsToSlots();
+      }
+    });
+
     this.sectionObserver = new IntersectionObserver(
       (entries) => {
         if (!this.introCompleted) return;
@@ -544,6 +604,168 @@ class PortfolioApp {
     );
 
     Object.values(this.sections).forEach((sec) => this.sectionObserver.observe(sec));
+  }
+
+  /**
+   * Checks if the user has genuinely reached the bottom Contact / Agent Dock region of the page
+   */
+  isAtBottomDockZone() {
+    if (!this.agentDockCard) return false;
+    const scrollBottom = window.scrollY + window.innerHeight;
+    const docHeight = document.documentElement.scrollHeight;
+    const dockRect = this.agentDockCard.getBoundingClientRect();
+
+    const nearDocumentBottom = scrollBottom >= docHeight - 95;
+    const dockFullyVisible =
+      dockRect.top >= 40 &&
+      dockRect.bottom <= window.innerHeight + 30 &&
+      scrollBottom >= docHeight - 210;
+
+    return nearDocumentBottom || dockFullyVisible;
+  }
+
+  shouldReleaseFromDock() {
+    if (!this.agentDockCard) return false;
+    const scrollBottom = window.scrollY + window.innerHeight;
+    const docHeight = document.documentElement.scrollHeight;
+    const dockRect = this.agentDockCard.getBoundingClientRect();
+
+    return scrollBottom < docHeight - 250 || dockRect.top > window.innerHeight * 0.78;
+  }
+
+  getSlotTargetPosition(roleId) {
+    const slotInfo = this.dockSlots.get(roleId);
+    if (!slotInfo) return { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5 };
+    const rect = slotInfo.bayTarget.getBoundingClientRect();
+    // Exact center for 18x18 cursor box inside bayTarget (matches .is-in-bay flex centering)
+    return {
+      x: rect.left + (rect.width - 18) * 0.5,
+      y: rect.top + (rect.height - 18) * 0.5
+    };
+  }
+
+  snapDockedCursorsToSlots() {
+    this.cursors.forEach((c) => {
+      if (c.isDocked) {
+        const pos = this.getSlotTargetPosition(c.id);
+        c.x = pos.x;
+        c.y = pos.y;
+        c.tx = pos.x;
+        c.ty = pos.y;
+      }
+    });
+  }
+
+  /**
+   * Executes the 5-step Agent Docking sequence when the user reaches the bottom of the page
+   */
+  startDockingSequence() {
+    if (this.dockState === 'docking' || this.dockState === 'docked') return;
+    this.dockState = 'docking';
+    const seqId = ++this.dockSequenceId;
+
+    // STEP 1: Finish any active typing/inspection cleanly & pause cursors in place
+    this.typingQueue.forEach((job) => this.finishTypingJobImmediately(job));
+    this.typingQueue = [];
+
+    this.cursors.forEach((c) => {
+      if (c.typingJob) {
+        this.finishTypingJobImmediately(c.typingJob);
+        c.typingJob = null;
+      }
+      c.isInspecting = false;
+      c.isDocked = false;
+      c.dockFlight = null;
+      c.el.classList.remove('is-typing');
+      c.tx = c.x;
+      c.ty = c.y;
+      c.scale = 1;
+    });
+
+    this.dockStatusText.textContent = 'WORK COMPLETE · PAUSING';
+    this.dockFooterNote.textContent = 'STEP 1/5 · TERMINATING ACTIVE TASKS...';
+    this.headerStatusLabel.textContent = '5 AGENTS RETURNING TO DOCK';
+    this.dockProgressFill.style.width = '15%';
+
+    // STEP 2: Prepare for return (restore role names & original colors)
+    setTimeout(() => {
+      if (this.dockSequenceId !== seqId || this.dockState !== 'docking') return;
+
+      this.dockStatusText.textContent = 'PREPARING DOCKING...';
+      this.dockFooterNote.textContent = 'STEP 2/5 · ALIGNING AGENT VECTORS...';
+      this.dockProgressFill.style.width = '30%';
+
+      this.cursors.forEach((c) => {
+        c.el.classList.remove('is-tags-hidden');
+        c.currentColor = c.color;
+        c.pathEl.setAttribute('fill', c.color);
+      });
+
+      // STEP 3: Launch calm, staggered curved flights toward each cursor's designated slot
+      setTimeout(() => {
+        if (this.dockSequenceId !== seqId || this.dockState !== 'docking') return;
+
+        this.dockStatusText.textContent = 'DOCKING IN PROGRESS...';
+        this.dockFooterNote.textContent = 'STEP 3/5 · RETURNING TO DESIGNATED BAYS...';
+        const now = performance.now();
+
+        this.cursors.forEach((c, idx) => {
+          const target = this.getSlotTargetPosition(c.id);
+          const midX = (c.x + target.x) * 0.5 + (idx - 2) * 54;
+          const midY = Math.min(c.y, target.y) - 86 - Math.abs(idx - 2) * 22;
+
+          c.dockFlight = {
+            seqId,
+            startX: c.x,
+            startY: c.y,
+            ctrlOffsetX: midX - (c.x + target.x) * 0.5,
+            ctrlOffsetY: midY - (c.y + target.y) * 0.5,
+            startAt: now + idx * 160,
+            duration: 1250 + idx * 90
+          };
+        });
+      }, 280);
+    }, 320);
+  }
+
+  /**
+   * Releases the 5 agents from Agent Dock when the user scrolls back up
+   */
+  releaseAgentsFromDock() {
+    if (this.dockState === 'idle') return;
+    this.dockState = 'idle';
+    this.dockSequenceId++;
+
+    if (this.agentDockCard) {
+      this.agentDockCard.classList.remove('is-all-docked');
+    }
+    this.dockStatusText.textContent = 'STANDBY · 0/5 DOCKED';
+    this.dockFooterNote.textContent = 'SCROLL TO BOTTOM TO DOCK ACTIVE AGENTS';
+    this.dockProgressFill.style.width = '0%';
+    this.headerStatusLabel.textContent = '5 AGENTS ACTIVE · SCROLL & INTERACT';
+
+    this.dockSlots.forEach((slotInfo) => {
+      slotInfo.slotEl.classList.remove('is-docked', 'is-just-docked');
+      slotInfo.stateLabel.textContent = 'STANDBY';
+    });
+
+    const activeSec = this.findCurrentViewportSection();
+    this.cursors.forEach((c, idx) => {
+      if (c.el.classList.contains('is-in-bay')) {
+        const pos = this.getSlotTargetPosition(c.id);
+        c.x = pos.x;
+        c.y = pos.y;
+        c.el.classList.remove('is-in-bay');
+        this.agentStage.appendChild(c.el);
+      }
+      c.isDocked = false;
+      c.dockFlight = null;
+      c.scale = 1;
+      c.el.classList.remove('is-tags-hidden');
+      c.currentColor = c.color;
+      c.pathEl.setAttribute('fill', c.color);
+      this.assignCursorToViewportSection(c, idx, activeSec);
+    });
   }
 
   findCurrentViewportSection() {
@@ -573,6 +795,18 @@ class PortfolioApp {
   }
 
   handleViewportScroll() {
+    // Check bottom docking / undocking thresholds first
+    if (this.isAtBottomDockZone()) {
+      this.startDockingSequence();
+      return;
+    }
+
+    if (this.dockState !== 'idle' && this.shouldReleaseFromDock()) {
+      this.releaseAgentsFromDock();
+    }
+
+    if (this.dockState !== 'idle') return;
+
     const activeSec = this.findCurrentViewportSection();
     if (!activeSec) return;
 
@@ -596,7 +830,7 @@ class PortfolioApp {
   }
 
   assignCursorToViewportSection(cursor, idx, sectionEl) {
-    if (cursor.isInspecting) return;
+    if (cursor.isInspecting || this.dockState !== 'idle') return;
     const targetSec = sectionEl || this.findCurrentViewportSection();
     if (!targetSec) return;
 
@@ -659,7 +893,7 @@ class PortfolioApp {
 
   highlightRealElement(cursor, targetEl, holdMs = 480) {
     return new Promise((resolve) => {
-      if (!(targetEl instanceof Element)) {
+      if (!(targetEl instanceof Element) || this.dockState !== 'idle') {
         resolve();
         return;
       }
@@ -693,7 +927,7 @@ class PortfolioApp {
       const track = (now) => {
         if (removed) return;
         const rect = targetEl.getBoundingClientRect();
-        if (!this.isRectNearViewport(rect, 180)) {
+        if (this.dockState !== 'idle' || !this.isRectNearViewport(rect, 180)) {
           removed = true;
           cursor.isInspecting = false;
           targetEl.classList.remove('is-agent-hover');
@@ -771,8 +1005,7 @@ class PortfolioApp {
   }
 
   enqueueSectionTypingJobs(sectionEl) {
-    // Only enqueue typing jobs once per section so elements never disappear & re-type on scroll
-    if (!sectionEl || this.typingEnqueuedSections.has(sectionEl)) return;
+    if (!sectionEl || this.typingEnqueuedSections.has(sectionEl) || this.dockState !== 'idle') return;
     this.typingEnqueuedSections.add(sectionEl);
 
     const candidates = Array.from(sectionEl.querySelectorAll('[data-agent-type]'));
@@ -797,7 +1030,9 @@ class PortfolioApp {
   }
 
   startNextTypingJobForCursor(cursor) {
-    if (!cursor || cursor.isInspecting || cursor.typingJob || this.typingQueue.length === 0) return;
+    if (!cursor || cursor.isInspecting || cursor.typingJob || this.typingQueue.length === 0 || this.dockState !== 'idle') {
+      return;
+    }
 
     this.typingQueue = this.typingQueue.filter((j) => {
       const near = this.isRectNearViewport(j.el.getBoundingClientRect(), 160);
@@ -953,7 +1188,7 @@ class PortfolioApp {
   }
 
   async activateSectionAgents(sectionEl, isHero = false) {
-    if (!sectionEl || this.sectionActivated.has(sectionEl.id)) return;
+    if (!sectionEl || this.sectionActivated.has(sectionEl.id) || this.dockState !== 'idle') return;
     if (!this.isRectNearViewport(sectionEl.getBoundingClientRect(), 240)) return;
 
     this.sectionActivated.add(sectionEl.id);
@@ -980,99 +1215,83 @@ class PortfolioApp {
     );
   }
 
-  initContactSphere() {
-    if (!this.sphereCanvas) return;
-    const ctx = this.sphereCanvas.getContext('2d');
-    const count = 96;
-    const points = [];
-    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-
-    for (let i = 0; i < count; i++) {
-      const y = 1 - (i / (count - 1)) * 2;
-      const radius = Math.sqrt(1 - y * y);
-      const theta = goldenAngle * i;
-      points.push({
-        bx: Math.cos(theta) * radius,
-        by: y,
-        bz: Math.sin(theta) * radius,
-        color: this.roles[i % this.roles.length].color
-      });
+  /**
+   * Updates curved flight trajectories and slot docking states during STEP 3 ~ STEP 5
+   */
+  updateDockingAnimation(now) {
+    if (this.dockState === 'docked') {
+      // Keep docked cursors anchored to their live DOM slot coordinates with minimal work
+      this.snapDockedCursorsToSlots();
+      return;
     }
 
-    this.sphereState = { ctx, points, rotY: 0, rotX: 0.25, hoverX: 0, hoverY: 0, isHovering: false };
+    let dockedCount = 0;
 
-    const resizeSphere = () => {
-      const rect = this.sphereCanvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      this.sphereCanvas.width = Math.max(260, rect.width) * dpr;
-      this.sphereCanvas.height = Math.max(240, rect.height) * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      this.sphereState.w = Math.max(260, rect.width);
-      this.sphereState.h = Math.max(240, rect.height);
-    };
+    this.cursors.forEach((c) => {
+      const flight = c.dockFlight;
+      if (!flight) return;
 
-    resizeSphere();
-    window.addEventListener('resize', resizeSphere);
+      const target = this.getSlotTargetPosition(c.id);
+      if (now < flight.startAt) {
+        c.tx = flight.startX;
+        c.ty = flight.startY;
+        return;
+      }
 
-    this.sphereCanvas.addEventListener('mousemove', (e) => {
-      const r = this.sphereCanvas.getBoundingClientRect();
-      this.sphereState.hoverX = ((e.clientX - r.left) / r.width - 0.5) * 2;
-      this.sphereState.hoverY = ((e.clientY - r.top) / r.height - 0.5) * 2;
-      this.sphereState.isHovering = true;
+      const rawT = Math.min(1, (now - flight.startAt) / flight.duration);
+      // Quintic ease-out for calm, smooth deceleration as each cursor approaches its bay
+      const easeT = 1 - Math.pow(1 - rawT, 5);
+
+      const ctrlX = (flight.startX + target.x) * 0.5 + flight.ctrlOffsetX;
+      const ctrlY = (flight.startY + target.y) * 0.5 + flight.ctrlOffsetY;
+
+      c.x = quadBezier(flight.startX, ctrlX, target.x, easeT);
+      c.y = quadBezier(flight.startY, ctrlY, target.y, easeT);
+      c.tx = c.x;
+      c.ty = c.y;
+
+      // Shrink smoothly toward 0.82 so landing in .is-in-bay is seamless
+      c.scale = 1 - easeT * 0.18;
+
+      if (rawT > 0.62) {
+        c.el.classList.add('is-tags-hidden');
+      }
+
+      if (rawT >= 1) {
+        dockedCount++;
+        if (!c.isDocked) {
+          c.isDocked = true;
+          this.spawnClickRipple(target.x + 9, target.y + 9, c.color);
+          const slotInfo = this.dockSlots.get(c.id);
+          if (slotInfo) {
+            c.el.classList.add('is-in-bay');
+            slotInfo.bayTarget.appendChild(c.el);
+            slotInfo.slotEl.classList.add('is-docked', 'is-just-docked');
+            slotInfo.stateLabel.textContent = 'DOCKED';
+          }
+        }
+      }
     });
 
-    this.sphereCanvas.addEventListener('mouseleave', () => {
-      this.sphereState.isHovering = false;
-    });
-  }
+    if (dockedCount > 0 && this.dockState === 'docking') {
+      this.dockStatusText.textContent = `DOCKING · ${dockedCount}/${this.cursors.length} DOCKED`;
+      this.dockProgressFill.style.width = `${30 + (dockedCount / this.cursors.length) * 70}%`;
+    }
 
-  renderContactSphere() {
-    if (!this.sphereState) return;
-    const { ctx, points, w, h, isHovering, hoverX, hoverY } = this.sphereState;
-    if (!w || !h) return;
-
-    ctx.clearRect(0, 0, w, h);
-
-    this.sphereState.rotY += isHovering ? 0.016 + hoverX * 0.02 : 0.009;
-    this.sphereState.rotX += isHovering ? (hoverY * 0.45 - this.sphereState.rotX) * 0.08 : (0.22 - this.sphereState.rotX) * 0.04;
-
-    const cosY = Math.cos(this.sphereState.rotY);
-    const sinY = Math.sin(this.sphereState.rotY);
-    const cosX = Math.cos(this.sphereState.rotX);
-    const sinX = Math.sin(this.sphereState.rotX);
-    const radius = Math.min(w, h) * 0.36;
-    const cx = w * 0.5;
-    const cy = h * 0.5;
-
-    const projected = points
-      .map((p) => {
-        const x1 = p.bx * cosY - p.bz * sinY;
-        const z1 = p.bz * cosY + p.bx * sinY;
-        const y2 = p.by * cosX - z1 * sinX;
-        const z2 = z1 * cosX + p.by * sinX;
-        const scale = 2.4 / (2.8 - z2);
-        const sx = cx + x1 * radius * scale;
-        const sy = cy + y2 * radius * scale;
-        return { sx, sy, z: z2, scale, color: p.color, angle: Math.atan2(sy - cy, sx - cx) };
-      })
-      .sort((a, b) => a.z - b.z);
-
-    projected.forEach((pt) => {
-      ctx.save();
-      ctx.translate(pt.sx, pt.sy);
-      ctx.rotate(pt.angle + Math.PI * 0.75);
-      ctx.scale(pt.scale * 0.75, pt.scale * 0.75);
-      ctx.globalAlpha = Math.max(0.24, Math.min(0.95, (pt.z + 1.2) / 2.2));
-      ctx.fillStyle = pt.color;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(10, 4.5);
-      ctx.lineTo(5.8, 6.2);
-      ctx.lineTo(4.2, 10.5);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    });
+    // STEP 5: All 5 cursors docked -> Finalize station state
+    if (dockedCount === this.cursors.length && this.dockState === 'docking') {
+      this.dockState = 'docked';
+      if (this.agentDockCard) {
+        this.agentDockCard.classList.add('is-all-docked');
+      }
+      this.dockStatusText.textContent = 'ALL AGENTS DOCKED';
+      this.dockFooterNote.textContent = 'ALL 5 AI AGENTS SAFELY STORED IN DOCK';
+      this.headerStatusLabel.textContent = 'ALL AGENTS DOCKED';
+      this.dockProgressFill.style.width = '100%';
+      this.cursors.forEach((c) => {
+        c.history = [];
+      });
+    }
   }
 
   animate(now) {
@@ -1081,94 +1300,105 @@ class PortfolioApp {
     const h = window.innerHeight;
     ctx.clearRect(0, 0, w, h);
 
-    const timeSinceMove = now - this.pointer.lastMoveAt;
-    const isPointerMoving = this.pointer.active && timeSinceMove < 120;
-    const userRecentlyMovedMouse = this.pointer.active && timeSinceMove < 1500;
-    const userRecentlyScrolled = now - this.lastScrollAt < 1800;
+    if (this.dockState !== 'idle') {
+      this.updateDockingAnimation(now);
+    } else {
+      const timeSinceMove = now - this.pointer.lastMoveAt;
+      const isPointerMoving = this.pointer.active && timeSinceMove < 120;
+      const userRecentlyMovedMouse = this.pointer.active && timeSinceMove < 1500;
+      const userRecentlyScrolled = now - this.lastScrollAt < 1800;
 
-    const anyAgentTyping = this.typingQueue.length > 0 || this.cursors.some((c) => Boolean(c.typingJob));
-    const anyAgentInspecting = this.cursors.some((c) => c.isInspecting);
+      const anyAgentTyping = this.typingQueue.length > 0 || this.cursors.some((c) => Boolean(c.typingJob));
+      const anyAgentInspecting = this.cursors.some((c) => c.isInspecting);
 
-    const usePointerClusterMode =
-      this.mouseOrbitMode &&
-      userRecentlyMovedMouse &&
-      !userRecentlyScrolled &&
-      !anyAgentInspecting &&
-      (!anyAgentTyping || isPointerMoving);
+      const usePointerClusterMode =
+        this.mouseOrbitMode &&
+        userRecentlyMovedMouse &&
+        !userRecentlyScrolled &&
+        !anyAgentInspecting &&
+        (!anyAgentTyping || isPointerMoving);
 
-    if (usePointerClusterMode) {
-      const targetMerge = isPointerMoving ? 1 : 0;
-      this.clusterMergeFactor += (targetMerge - this.clusterMergeFactor) * (isPointerMoving ? 0.24 : 0.12);
-      this.orbitAngle += 0.0072 * (1 - this.clusterMergeFactor * 0.7);
+      if (usePointerClusterMode) {
+        const targetMerge = isPointerMoving ? 1 : 0;
+        this.clusterMergeFactor += (targetMerge - this.clusterMergeFactor) * (isPointerMoving ? 0.24 : 0.12);
+        this.orbitAngle += 0.0072 * (1 - this.clusterMergeFactor * 0.7);
 
-      const hideRoleTags = this.clusterMergeFactor > 0.18;
-      const unifiedBlendColor = '#4B6B88';
+        const hideRoleTags = this.clusterMergeFactor > 0.18;
+        const unifiedBlendColor = '#4B6B88';
 
-      this.cursors.forEach((c, idx) => {
-        if (c.typingJob) c.el.classList.remove('is-typing');
-        const slotAngle = this.orbitAngle + (idx / this.cursors.length) * Math.PI * 2;
-        const currentRadius = (46 + idx * 4) * (1 - this.clusterMergeFactor);
-        c.tx = this.pointer.x + Math.cos(slotAngle) * currentRadius;
-        c.ty = this.pointer.y + Math.sin(slotAngle) * currentRadius;
-        c.el.classList.toggle('is-tags-hidden', hideRoleTags);
+        this.cursors.forEach((c, idx) => {
+          if (c.typingJob) c.el.classList.remove('is-typing');
+          c.scale = 1;
+          const slotAngle = this.orbitAngle + (idx / this.cursors.length) * Math.PI * 2;
+          const currentRadius = (46 + idx * 4) * (1 - this.clusterMergeFactor);
+          c.tx = this.pointer.x + Math.cos(slotAngle) * currentRadius;
+          c.ty = this.pointer.y + Math.sin(slotAngle) * currentRadius;
+          c.el.classList.toggle('is-tags-hidden', hideRoleTags);
 
-        const blended = lerpHexColor(c.color, unifiedBlendColor, this.clusterMergeFactor * 0.78);
-        if (blended !== c.currentColor) {
-          c.currentColor = blended;
-          c.pathEl.setAttribute('fill', blended);
-        }
-      });
-    } else if (this.mouseOrbitMode) {
-      this.clusterMergeFactor += (0 - this.clusterMergeFactor) * 0.15;
-      const currentSec = this.findCurrentViewportSection();
+          const blended = lerpHexColor(c.color, unifiedBlendColor, this.clusterMergeFactor * 0.78);
+          if (blended !== c.currentColor) {
+            c.currentColor = blended;
+            c.pathEl.setAttribute('fill', blended);
+          }
+        });
+      } else if (this.mouseOrbitMode) {
+        this.clusterMergeFactor += (0 - this.clusterMergeFactor) * 0.15;
+        const currentSec = this.findCurrentViewportSection();
 
-      this.cursors.forEach((c, idx) => {
-        if (c.isInspecting) return;
+        this.cursors.forEach((c, idx) => {
+          if (c.isInspecting) return;
+          c.scale = 1;
+          c.el.classList.remove('is-tags-hidden');
+          if (c.currentColor !== c.color) {
+            c.currentColor = c.color;
+            c.pathEl.setAttribute('fill', c.color);
+          }
 
-        c.el.classList.remove('is-tags-hidden');
-        if (c.currentColor !== c.color) {
-          c.currentColor = c.color;
-          c.pathEl.setAttribute('fill', c.color);
-        }
+          if (!c.typingJob) this.startNextTypingJobForCursor(c);
+          if (c.typingJob && this.stepCursorTypingJob(c, now)) return;
 
-        if (!c.typingJob) this.startNextTypingJobForCursor(c);
-        if (c.typingJob && this.stepCursorTypingJob(c, now)) return;
-
-        if (now >= c.nextPatrolAt || !c.patrolElement || !this.isRectNearViewport(c.patrolElement.getBoundingClientRect(), 60)) {
-          this.assignCursorToViewportSection(c, idx, currentSec);
-        } else {
-          const r = c.patrolElement.getBoundingClientRect();
-          const slot = ROLE_SLOT_OFFSET[c.id] || { x: 0.5, y: 0.5 };
-          c.tx = Math.max(24, Math.min(w - 88, r.left + Math.min(r.width * slot.x, r.width - 10) + Math.cos(now * 0.002 + idx * 1.3) * 12));
-          c.ty = Math.max(60, Math.min(h - 42, r.top + Math.min(r.height * slot.y, 26) + Math.sin(now * 0.0024 + idx * 1.7) * 7));
-        }
-      });
+          if (now >= c.nextPatrolAt || !c.patrolElement || !this.isRectNearViewport(c.patrolElement.getBoundingClientRect(), 60)) {
+            this.assignCursorToViewportSection(c, idx, currentSec);
+          } else {
+            const r = c.patrolElement.getBoundingClientRect();
+            const slot = ROLE_SLOT_OFFSET[c.id] || { x: 0.5, y: 0.5 };
+            c.tx = Math.max(24, Math.min(w - 88, r.left + Math.min(r.width * slot.x, r.width - 10) + Math.cos(now * 0.002 + idx * 1.3) * 12));
+            c.ty = Math.max(60, Math.min(h - 42, r.top + Math.min(r.height * slot.y, 26) + Math.sin(now * 0.0024 + idx * 1.7) * 7));
+          }
+        });
+      }
     }
 
     this.cursors.forEach((c) => {
-      const easeFactor = c.isInspecting
-        ? 0.42
-        : c.typingJob && c.typingJob.phase === 'typing'
-          ? 0.34
-          : c.ease + this.clusterMergeFactor * 0.16;
-      c.x += (c.tx - c.x) * easeFactor;
-      c.y += (c.ty - c.y) * easeFactor;
-      c.el.style.transform = `translate3d(${c.x.toFixed(1)}px, ${c.y.toFixed(1)}px, 0)`;
+      if (this.dockState === 'idle') {
+        const easeFactor = c.isInspecting
+          ? 0.42
+          : c.typingJob && c.typingJob.phase === 'typing'
+            ? 0.34
+            : c.ease + this.clusterMergeFactor * 0.16;
+        c.x += (c.tx - c.x) * easeFactor;
+        c.y += (c.ty - c.y) * easeFactor;
+      }
 
-      c.history.push({ x: c.x, y: c.y });
-      if (c.history.length > 14) c.history.shift();
+      const scaleStr = c.scale && c.scale !== 1 ? ` scale(${c.scale.toFixed(3)})` : '';
+      c.el.style.transform = `translate3d(${c.x.toFixed(1)}px, ${c.y.toFixed(1)}px, 0)${scaleStr}`;
 
-      if (c.history.length > 2) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(c.history[0].x, c.history[0].y);
-        for (let i = 1; i < c.history.length; i++) ctx.lineTo(c.history[i].x, c.history[i].y);
-        ctx.strokeStyle = c.currentColor;
-        ctx.globalAlpha = 0.24 * (1 - this.clusterMergeFactor * 0.5);
-        ctx.lineWidth = 1.4;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-        ctx.restore();
+      if (this.dockState !== 'docked') {
+        c.history.push({ x: c.x, y: c.y });
+        if (c.history.length > 14) c.history.shift();
+
+        if (c.history.length > 2) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(c.history[0].x, c.history[0].y);
+          for (let i = 1; i < c.history.length; i++) ctx.lineTo(c.history[i].x, c.history[i].y);
+          ctx.strokeStyle = c.currentColor;
+          ctx.globalAlpha = 0.24 * (1 - this.clusterMergeFactor * 0.5);
+          ctx.lineWidth = 1.4;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+          ctx.restore();
+        }
       }
     });
 
@@ -1190,7 +1420,6 @@ class PortfolioApp {
       ctx.restore();
     }
 
-    this.renderContactSphere();
     requestAnimationFrame(this.animate);
   }
 }

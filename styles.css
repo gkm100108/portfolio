@@ -968,17 +968,17 @@ main#portfolio-root {
   margin-top: auto;
 }
 
-/* 6. CONTACT & 3D SWARM SPHERE */
+/* 6. CONTACT & AGENT DOCK */
 .contact-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 0.95fr 1.05fr;
   gap: 32px;
   align-items: stretch;
 }
 
 .contact-card,
-.swarm-sphere-card {
-  padding: 36px;
+.agent-dock-card {
+  padding: 34px;
   border-radius: 18px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
@@ -989,25 +989,282 @@ main#portfolio-root {
   gap: 22px;
 }
 
-.swarm-sphere-card {
+/* AGENT DOCK — High-Precision AI Hardware Station */
+.agent-dock-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 244, 249, 0.92) 100%);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow:
+    0 12px 32px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+.agent-dock-card.is-all-docked {
+  border-color: rgba(75, 142, 179, 0.38);
+  box-shadow:
+    0 14px 36px rgba(75, 142, 179, 0.1),
+    0 0 0 1px rgba(75, 142, 179, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.dock-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dock-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dock-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.dock-title {
+  font-family: var(--font-display);
+  font-size: 1.28rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--text-main);
+}
+
+.dock-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  transition: background 0.35s ease, border-color 0.35s ease, color 0.35s ease;
+}
+
+.dock-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-orange);
+  box-shadow: 0 0 6px rgba(204, 135, 75, 0.45);
+  transition: background 0.35s ease, box-shadow 0.35s ease;
+}
+
+.agent-dock-card.is-all-docked .dock-status-pill {
+  background: rgba(76, 158, 112, 0.11);
+  border-color: rgba(76, 158, 112, 0.32);
+  color: #2f6f4a;
+}
+
+.agent-dock-card.is-all-docked .dock-status-dot {
+  background: var(--accent-green);
+  box-shadow: 0 0 10px rgba(76, 158, 112, 0.7);
+}
+
+/* Acrylic Chamber Enclosure */
+.dock-chamber {
+  position: relative;
+  padding: 20px 16px 18px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(232, 236, 243, 0.75) 0%, rgba(244, 246, 250, 0.9) 100%);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  box-shadow:
+    inset 0 2px 6px rgba(15, 23, 42, 0.05),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.85);
+}
+
+/* Transparent Acrylic Cover Sheen */
+.dock-chamber::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    125deg,
+    rgba(255, 255, 255, 0.48) 0%,
+    rgba(255, 255, 255, 0.08) 38%,
+    transparent 60%
+  );
+  pointer-events: none;
+}
+
+.dock-slots-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+
+.dock-slot {
+  --slot-color: var(--accent-blue);
+  position: relative;
+  padding: 12px 6px 11px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow:
+    0 2px 6px rgba(15, 23, 42, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  transition:
+    border-color 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.35s ease;
+}
+
+/* Top LED Bar on Each Slot */
+.dock-slot-led {
+  width: 26px;
+  height: 3.5px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.13);
+  transition: background 0.35s ease, box-shadow 0.35s ease;
+}
+
+/* Recessed Cursor Bay Well */
+.dock-bay-target {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(241, 244, 249, 0.9);
+  border: 1px dashed rgba(15, 23, 42, 0.14);
+  box-shadow: inset 0 2px 5px rgba(15, 23, 42, 0.05);
+  display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
-  min-height: 360px;
+  transition: border-color 0.35s ease, background 0.35s ease, box-shadow 0.35s ease;
 }
 
-#contact-swarm-canvas {
-  width: 100%;
-  height: 290px;
-  display: block;
+.agent-cursor.is-in-bay {
+  position: static !important;
+  width: 18px;
+  height: 18px;
+  transform: scale(0.82) !important;
+  transform-origin: center center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.swarm-caption {
+.agent-cursor.is-in-bay .agent-cursor-tag {
+  display: none;
+}
+
+.dock-slot-role {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   color: var(--text-muted);
   text-align: center;
-  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.dock-slot-state {
+  font-family: var(--font-mono);
+  font-size: 0.54rem;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+/* Active / Docked Slot State */
+.dock-slot.is-docked {
+  background: #ffffff;
+  border-color: color-mix(in srgb, var(--slot-color) 55%, transparent);
+  box-shadow:
+    0 6px 16px color-mix(in srgb, var(--slot-color) 16%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--slot-color) 8%, transparent);
+  transform: translateY(-2px);
+}
+
+.dock-slot.is-docked .dock-slot-led {
+  background: var(--slot-color);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--slot-color) 75%, transparent);
+}
+
+.dock-slot.is-docked .dock-bay-target {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--slot-color) 45%, transparent);
+  background: color-mix(in srgb, var(--slot-color) 9%, #ffffff);
+  box-shadow:
+    inset 0 0 10px color-mix(in srgb, var(--slot-color) 16%, transparent),
+    0 0 8px color-mix(in srgb, var(--slot-color) 18%, transparent);
+}
+
+.dock-slot.is-docked .dock-slot-role {
+  color: var(--text-main);
+}
+
+.dock-slot.is-docked .dock-slot-state {
+  color: var(--slot-color);
+  font-weight: 600;
+}
+
+.dock-slot.is-just-docked {
+  animation: slotDockPulse 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slotDockPulse {
+  0% { transform: scale(0.96); }
+  45% {
+    transform: translateY(-3px) scale(1.03);
+    box-shadow: 0 0 22px color-mix(in srgb, var(--slot-color) 38%, transparent);
+  }
+  100% { transform: translateY(-2px) scale(1); }
+}
+
+.dock-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+.dock-progress-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.07);
+  overflow: hidden;
+  max-width: 140px;
+}
+
+.dock-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+  transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .site-footer {
@@ -1043,5 +1300,11 @@ main#portfolio-root {
   .project-metrics-col {
     align-items: flex-start;
     text-align: left;
+  }
+}
+
+@media (max-width: 600px) {
+  .dock-slots-grid {
+    grid-template-columns: repeat(3, 1fr);
   }
 }
